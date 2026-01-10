@@ -119,10 +119,6 @@ class ToolsParser:
             )
         return types.Tool(function_declarations=functions)
 
-    # Устаревшая реализация
-    # def get_tools_json_genai(self):
-    #    return [self._get_tool_json(t, uppercase=True) for t in self.tools]
-
 
 # Декоратор для регистрации инструментов. Добавляет в пул сами объекты
 def register_tool(func):

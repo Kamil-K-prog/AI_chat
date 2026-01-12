@@ -14,8 +14,7 @@ class GenaiBaseModel(BaseModel):
     Благодаря унификации все модели принимают историю сообщений в формате-адаптере, затем конвертируют его в нужный для себя формат, делают запрос, конвертируют обратно и возвращают.
     """
 
-    def __init__(self, tools_definition, tools_executable: Dict[str, Callable]):
-        super().__init__(tools_definition, tools_executable)
+    def __init__(self):
         self.model_name = None  # Будет переопределено в конкретном классе модели
         self.client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
@@ -29,9 +28,9 @@ class GenaiBaseModel(BaseModel):
             ),
         )
 
-    def generate(self, messages) -> List[List, List[types.Content]]:
+    def generate(self, messages, tools_definition, tools_executable: Dict[str, Callable]) -> List[List, List[types.Content]]:
         """Генерирует ответ на сообщение. Возвращает:
         1) Дельту (сообщения, которые были сгенерированы в этом раунде
-        2) Новую историю сообщений (конвертировать её тут же или в UI?)
+        2) Новую, дополненную историю сообщений
         """
         pass

@@ -4,3 +4,4 @@ import utils.tools # Импорт, чтобы сработали декорат�
 # --- Инструменты для нейросети ---
 tools_parser = ToolsParser()
 
+print(tools_parser.get_tools_json_openai())

@@ -1,41 +1,188 @@
-# Руководство по форматам ввода и вывода: Google GenAI и OpenAI
+# Руководство по форматам: Google GenAI и OpenAI
 
-Этот документ описывает структуру данных, поддерживаемые медиаформаты и механизмы работы с Chain-of-Thought (мыслями) в библиотеках `google-genai` и `openai`.
+Справочник для написания конвертеров УФС ↔ нативные форматы.
 
 ---
 
-## 1. Google GenAI (SDK v1+)
+## 1. Роли сообщений
 
-Библиотека `google-genai` использует строгую типизацию через модуль `types`. Основная структура взаимодействия — это объекты `Content`, состоящие из списка `Part`.
+| УФС         | Google GenAI                                | OpenAI                |
+| ----------- | ------------------------------------------- | --------------------- |
+| `system`    | `system_instruction` (отдельный параметр)   | `"role": "system"`    |
+| `user`      | `"role": "user"`                            | `"role": "user"`      |
+| `assistant` | `"role": "model"`                           | `"role": "assistant"` |
+| `tool`      | `"role": "user"` с `function_response` Part | `"role": "tool"`      |
 
-### Структурирование ввода (Multimodal)
+> **GenAI**: Одинаковые роли НЕ могут идти подряд! При конвертации нужно объединять.
 
-Ввод в `client.models.generate_content` передается через аргумент `contents`, который может быть строкой, словарем или списком объектов `types.Content`.
+---
 
-#### Основные типы Part:
+## 2. Структура Content
 
-1.  **Text**: `types.Part.from_text(text="...")` — обычный текст.
-2.  **Inline Data (Binary)**: `types.Part.from_bytes(data=b"...", mime_type="image/jpeg")` — для небольших файлов.
-3.  **File Data (URI)**: `types.Part.from_uri(file_uri="https://...", mime_type="video/mp4")` — ссылка на файл, загруженный через File API или доступный удаленно.
-
-#### Пример мультимодального запроса:
+### Google GenAI
 
 ```python
-from google import genai
-from google.genai import types
+types.Content(
+    role="user" | "model",
+    parts=[
+        types.Part.from_text(text="..."),
+        types.Part.from_bytes(data=b"...", mime_type="image/jpeg"),
+        types.Part.from_uri(file_uri="https://...", mime_type="video/mp4"),
+        # function_call и function_response — автоматически
+    ]
+)
+```
 
-client = genai.Client(api_key="YOUR_API_KEY")
+### OpenAI
 
-response = client.models.generate_content(
-    model="gemini-2.0-flash",
-    contents=[
-        types.Content(
-            role="user",
+```python
+{
+    "role": "user" | "assistant" | "system" | "tool",
+    "content": [
+        {"type": "text", "text": "..."},
+        {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,...", "detail": "auto"}}
+    ],
+    # Для assistant с tool_calls:
+    "tool_calls": [...],
+    # Для tool:
+    "tool_call_id": "call_xxx"
+}
+```
+
+---
+
+## 3. Медиаформаты
+
+### Google GenAI
+
+| Категория   | MIME-типы                                        | Примечания          |
+| ----------- | ------------------------------------------------ | ------------------- |
+| Изображения | `image/png`, `jpeg`, `webp`, `heic`, `heif`      | До 3072x3072        |
+| Аудио       | `audio/wav`, `mp3`, `aiff`, `aac`, `ogg`, `flac` | 1 сек ≈ 32 токена   |
+| Видео       | `video/mp4`, `mpeg`, `mov`, `avi`, `webm`        | 1 сек ≈ 300 токенов |
+| Документы   | `application/pdf`                                | До 1000 стр         |
+
+> **URL**: НЕ поддерживает внешние HTTP ссылки. Только `client.files.upload()` → `uri`.
+
+### OpenAI
+
+| Категория    | Форматы                      | Примечания                       |
+| ------------ | ---------------------------- | -------------------------------- |
+| Изображения  | `png`, `jpeg`, `webp`, `gif` | URL или Base64. До 20MB          |
+| Аудио (ввод) | `mp3`, `wav`, `flac`, `opus` | Через Whisper или `gpt-4o-audio` |
+
+> **URL**: Поддерживает внешние HTTP/HTTPS ссылки для изображений.
+
+---
+
+## 4. Function Calling (Tools)
+
+### 4.1 Объявление функций
+
+**Google GenAI:**
+
+```python
+config = types.GenerateContentConfig(
+    tools=[types.Tool(function_declarations=[
+        {
+            "name": "get_weather",
+            "description": "Get current weather",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string", "description": "City name"}
+                },
+                "required": ["location"]
+            }
+        }
+    ])]
+)
+```
+
+**OpenAI:**
+
+```python
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get current weather",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string", "description": "City name"}
+                },
+                "required": ["location"]
+            }
+        }
+    }
+]
+```
+
+### 4.2 Получение tool_call из ответа
+
+**Google GenAI:**
+
+```python
+for part in response.candidates[0].content.parts:
+    if part.function_call:
+        name = part.function_call.name
+        args = part.function_call.args  # dict
+        # id отсутствует в GenAI!
+```
+
+**OpenAI:**
+
+```python
+for tool_call in response.choices[0].message.tool_calls:
+    id = tool_call.id           # "call_xxx" — обязательно сохранить!
+    name = tool_call.function.name
+    args = json.loads(tool_call.function.arguments)  # строка → dict
+```
+
+### 4.3 Отправка tool_result
+
+**Google GenAI (роль `"user"`):**
+
+```python
+types.Content(
+    role="user",
+    parts=[
+        types.Part.from_function_response(
+            name="get_weather",
+            response={"result": {"temp": 20, "unit": "C"}}
+        )
+    ]
+)
+```
+
+**OpenAI (роль `"tool"`):**
+
+```python
+{
+    "role": "tool",
+    "tool_call_id": "call_xxx",  # Должен совпадать с id из tool_call!
+    "content": '{"temp": 20, "unit": "C"}'  # Строка JSON
+}
+```
+
+### 4.4 Мультимодальный tool_result (Gemini 3+)
+
+```python
+types.Content(
+    role="user",  # ВАЖНО: role="user", НЕ "tool"!
+    parts=[
+        types.Part.from_function_response(
+            name="generate_chart",
+            response={"image_ref": {"$ref": "chart.png"}},
             parts=[
-                types.Part.from_text(text="Что на этом изображении?"),
-                types.Part.from_bytes(
-                    data=open("image.jpg", "rb").read(),
-                    mime_type="image/jpeg"
+                types.FunctionResponsePart(
+                    inline_data=types.FunctionResponseBlob(
+                        mime_type="image/png",
+                        display_name="chart.png",
+                        data=image_bytes
+                    )
                 )
             ]
         )
@@ -43,156 +190,83 @@ response = client.models.generate_content(
 )
 ```
 
-### Поддерживаемые медиаформаты (Google)
-
-| Категория       | MIME-типы                                                                      | Особенности                          |
-| :-------------- | :----------------------------------------------------------------------------- | :----------------------------------- |
-| **Изображения** | `image/png`, `image/jpeg`, `image/webp`, `image/heic`, `image/heif`            | До 3072x3072 (сжимаются)             |
-| **Аудио**       | `audio/wav`, `audio/mp3`, `audio/aiff`, `audio/aac`, `audio/ogg`, `audio/flac` | 1 сек = ~32 токена                   |
-| **Видео**       | `video/mp4`, `video/mpeg`, `video/mov`, `video/avi`, `video/webm` и др.        | 1 сек = ~300 токенов (при 1 FPS)     |
-| **Документы**   | `application/pdf`                                                              | До 1000 страниц, 1 стр = 258 токенов |
-
-> **ВАЖНО (URL)**: Google GenAI **НЕ поддерживает** внешние HTTP/HTTPS ссылки напрямую. Вы должны сначала загрузить файл через `client.files.upload()` и использовать полученный `uri`.
+> OpenAI **не поддерживает** мультимодальные tool_result.
 
 ---
 
-### Механизм "Мыслей" (Thinking) в Gemini
+## 5. Структура Response
 
-Модели серии Gemini 2.0+ поддерживают явную выдачу процесса рассуждений.
+### Google GenAI
 
-#### Настройка (Config):
+```python
+response.candidates[0].content.parts[]  # List[Part]
+# Каждый Part может быть:
+#   - part.text (строка)
+#   - part.thought (bool) + part.text — мысли модели
+#   - part.function_call — вызов инструмента
 
-Для включения мыслей необходимо использовать `thinking_config`.
+response.candidates[0].finish_reason  # "STOP", "TOOL_USE", "MAX_TOKENS"
+response.usage_metadata.prompt_token_count
+response.usage_metadata.candidates_token_count
+```
 
-- `include_thoughts: True` — включает выдачу рассуждений.
-- `thinking_budget`: Количество токенов, выделяемых на рассуждения (для Gemini 2.x).
-- `thinking_level`: `MINIMAL`, `LOW`, `MEDIUM`, `HIGH` (для Gemini 3.x).
+### OpenAI
 
-#### Обработка ответа:
+```python
+response.choices[0].message.content      # Текст ответа
+response.choices[0].message.tool_calls   # Список вызовов [ChatCompletionMessageToolCall]
+response.choices[0].message.reasoning_content  # Мысли (o1/o3)
 
-Ответ приходит в виде списка `parts`. Те части, которые являются рассуждениями, имеют флаг `thought=True`.
+response.choices[0].finish_reason  # "stop", "tool_calls", "length", "content_filter"
+response.usage.prompt_tokens
+response.usage.completion_tokens
+```
+
+### Маппинг finish_reason
+
+| УФС              | GenAI        | OpenAI           |
+| ---------------- | ------------ | ---------------- |
+| `stop`           | `STOP`       | `stop`           |
+| `tool_calls`     | `TOOL_USE`   | `tool_calls`     |
+| `length`         | `MAX_TOKENS` | `length`         |
+| `content_filter` | `SAFETY`     | `content_filter` |
+
+---
+
+## 6. Thinking (Chain-of-Thought)
+
+### Google GenAI
 
 ```python
 config = types.GenerateContentConfig(
     thinking_config=types.ThinkingConfig(include_thoughts=True)
 )
 
-response = client.models.generate_content(
-    model="gemini-2.0-flash-thinking-exp",
-    contents="Реши задачу: верблюд прошел 100 км за 2 дня...",
-    config=config
-)
-
 for part in response.candidates[0].content.parts:
     if part.thought:
-        print(f"РАССУЖДЕНИЕ: {part.text}")
-    elif part.text:
+        print(f"МЫСЛЬ: {part.text}")
+    else:
         print(f"ОТВЕТ: {part.text}")
 ```
 
----
-
-## 2. OpenAI
-
-OpenAI использует более "плоскую" структуру JSON-объектов в массиве `messages`.
-
-### Структурирование ввода
-
-Ввод для мультимодальных моделей (например, `gpt-4o`) передается в поле `content` как список объектов.
-
-#### Пример (Текст + Изображение):
+### OpenAI (o1/o3)
 
 ```python
-from openai import OpenAI
-
-client = OpenAI()
-
-response = client.chat.completions.create(
-    model="gpt-4o",
-    messages=[
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "Опиши картинку"},
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/jpeg;base64,{base64_image}",
-                        "detail": "high" # auto, low, high
-                    }
-                }
-            ]
-        }
-    ]
-)
+thought = response.choices[0].message.reasoning_content  # Может быть None
+answer = response.choices[0].message.content
 ```
 
-### Поддерживаемые медиаформаты (OpenAI)
-
-| Категория         | Форматы / Методы                                | Особенности                                          |
-| :---------------- | :---------------------------------------------- | :--------------------------------------------------- |
-| **Изображения**   | `png`, `jpeg`, `webp`, `gif` (не анимированный) | URL или Base64. Лимит 20MB на файл.                  |
-| **Аудио (Ввод)**  | `mp3`, `wav`, `flac`, `opus` и др.              | Через API транскрипции (Whisper) или `gpt-4o-audio`. |
-| **Аудио (Вывод)** | `mp3`, `opus`, `aac`, `flac`, `wav`, `pcm`      | Параметр `audio` в `response_format`.                |
-
-> **ВАЖНО (URL)**: OpenAI **поддерживает** внешние общедоступные ссылки (HTTP/HTTPS) для изображений. Сервер OpenAI самостоятельно скачивает файл для обработки.
+> **УФС**: Мысли сохраняются как `ThoughtContent(type="thought", text="...")`.
+> При конвертации в `interleaved` режиме — фильтруются перед финальным ответом.
 
 ---
 
-### Механизм "Мыслей" (Reasoning) в OpenAI (o1, o3)
+## 7. Ключевые ограничения
 
-Модели `o1` и `o3` используют внутренний Chain-of-Thought, который теперь можно частично или полностью извлекать.
-
-#### Настройка:
-
-Используется параметр `reasoning_effort` (заменяет `thinking_budget` в новых версиях).
-
-- Значения: `low`, `medium`, `high`.
-
-#### Извлечение мыслей:
-
-В последних версиях библиотеки мысли возвращаются в поле `reasoning_content` объекта сообщения.
-
-```python
-response = client.chat.completions.create(
-    model="o1-preview",
-    messages=[{"role": "user", "content": "Сложная логическая задача..."}],
-    # reasoning_effort="high" # если поддерживается моделью
-)
-
-# Извлечение мыслей (если доступно в API)
-thought = response.choices[0].message.reasoning_content
-print(f"Мысли модели: {thought}")
-print(f"Ответ: {response.choices[0].message.content}")
-```
-
-**Важно**: Токены рассуждений (reasoning tokens) всегда учитываются в `usage.completion_tokens`, даже если сам текст мыслей скрыт.
-
----
-
-## Сравнительная таблица Chain-of-Thought
-
-| Характеристика      | Google GenAI (Gemini)                         | OpenAI (o1/o3)                   |
-| :------------------ | :-------------------------------------------- | :------------------------------- |
-| **Включение**       | `include_thoughts=True` в конфиге             | Автоматически (для o-серии)      |
-| **Доступ к тексту** | Поле `part.thought` в списке частей           | Поле `message.reasoning_content` |
-| **Контроль усилий** | `thinking_level` (enum)                       | `reasoning_effort` (string)      |
-| **Контекст**        | Требует `thought_signature` для Stateless API | Скрыто внутри сессии (Chat)      |
-
-## Рекомендации по использованию типизации (GenAI types)
-
-Всегда импортируйте `types` из `google.genai`. Это обеспечит автодополнение и валидацию:
-
-```python
-from google.genai import types
-
-# Правильный способ создания схемы для структурированного вывода
-schema = types.Schema(
-    type=types.Type.OBJECT,
-    properties={
-        "score": types.Schema(type=types.Type.INTEGER),
-        "reason": types.Schema(type=types.Type.STRING)
-    },
-    required=["score", "reason"]
-)
-```
+| Ограничение                      | GenAI                          | OpenAI               |
+| -------------------------------- | ------------------------------ | -------------------- |
+| Последовательные одинаковые роли | ❌ Запрещено                   | ✅ Разрешено         |
+| Внешние URL для медиа            | ❌ Только через Files API      | ✅ Поддерживаются    |
+| ID у tool_call                   | ❌ Отсутствует                 | ✅ Обязателен        |
+| Мультимодальный tool_result      | ✅ Gemini 3+                   | ❌ Нет               |
+| system role                      | Отдельный `system_instruction` | В массиве `messages` |

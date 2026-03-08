@@ -1,5 +1,5 @@
 """
-Универсальный Формат Сообщений (УФС) v1.0
+Универсальный Формат Сообщений (УФС/UMF) v1.0
 
 Pydantic-модели для хранения истории чата в унифицированном формате.
 Данные из УФС конвертируются в формат, совместимый с OpenAI или Google GenAI.
@@ -15,24 +15,30 @@ from pydantic import BaseModel, Field
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-class OpenAICloudRef(BaseModel):
-    """Ссылка на файл, загруженный в OpenAI."""
+class CloudRef(BaseModel):
+    """
+    Универсальная ссылка на файл в облачном хранилище провайдера.
+    Может содержать id, uri, expires_at и другие поля.
+    """
 
-    id: str  # file-xxx
-
-
-class GenAICloudRef(BaseModel):
-    """Ссылка на файл, загруженный в Google GenAI (живёт 48 часов)."""
-
-    uri: str  # https://generativelanguage.googleapis.com/...
-    expires_at: datetime  # Время истечения
+    id: Optional[str] = None  # file-xxx (OpenAI)
+    uri: Optional[str] = None  # https://... (GenAI)
+    expires_at: Optional[datetime] = None  # Время истечения срока жизни (GenAI)
+    # Разрешаем любые дополнительные поля для специфичных провайдеров
+    model_config = {"extra": "allow"}
 
 
 class CloudRefs(BaseModel):
-    """Ссылки на файл в облачных хранилищах провайдеров."""
+    """
+    Ссылки на файл в облачных хранилищах различных провайдеров.
+    Поля openai и genai типизированы для удобства, остальные можно передавать как kwargs.
+    """
 
-    openai: Optional[OpenAICloudRef] = None
-    genai: Optional[GenAICloudRef] = None
+    public: Optional[CloudRef] = None  # Публичная ссылка (исходник в вебе)
+    openai: Optional[CloudRef] = None
+    genai: Optional[CloudRef] = None
+    # Разрешаем добавлять других провайдеров (deepseek, anthropic и т.д.)
+    model_config = {"extra": "allow"}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -50,7 +56,8 @@ class Asset(BaseModel):
     """
 
     id: str  # Внутренний уникальный ID
-    local_path: str  # Путь к файлу на диске
+    type: Literal["image", "audio", "video", "document"]  # Тип ассета
+    local_path: Optional[str] = None  # Путь к файлу на диске (если есть)
     mime_type: str  # image/jpeg, audio/mp3, application/pdf и т.д.
     size_bytes: int = 0
     data_base64: Optional[str] = None  # Для небольших файлов (inline)
@@ -96,33 +103,16 @@ class ThoughtContent(BaseModel):
 
     type: Literal["thought"] = "thought"
     text: str
+    signature: Optional[str] = None  # Base64 encoded signature (GenAI)
 
 
-class ImageContent(BaseModel):
-    """Изображение(я)."""
+class MediaContent(BaseModel):
+    """
+    Медиа-контент (изображения, аудио, видео, документы).
+    Тип конкретного файла определяется внутри Asset.type.
+    """
 
-    type: Literal["image"] = "image"
-    assets: list[Asset]
-
-
-class AudioContent(BaseModel):
-    """Аудиофайл(ы)."""
-
-    type: Literal["audio"] = "audio"
-    assets: list[Asset]
-
-
-class VideoContent(BaseModel):
-    """Видеофайл(ы)."""
-
-    type: Literal["video"] = "video"
-    assets: list[Asset]
-
-
-class DocumentContent(BaseModel):
-    """Документ(ы) — PDF, TXT и т.д."""
-
-    type: Literal["document"] = "document"
+    type: Literal["media"] = "media"
     assets: list[Asset]
 
 
@@ -143,14 +133,7 @@ class ToolResultContent(BaseModel):
 
 # Объединение всех типов контента (Discriminated Union по полю "type")
 ContentItem = (
-    TextContent
-    | ThoughtContent
-    | ImageContent
-    | AudioContent
-    | VideoContent
-    | DocumentContent
-    | ToolCallContent
-    | ToolResultContent
+    TextContent | ThoughtContent | MediaContent | ToolCallContent | ToolResultContent
 )
 
 

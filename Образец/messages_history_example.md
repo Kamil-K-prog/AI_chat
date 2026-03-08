@@ -32,26 +32,33 @@ messages_structure = {
             "content": [
                 {
                     # Тип контента
-                    "type": "text" | "thought" | "image" | "audio" | "video" | "document" | "tool_call" | "tool_result",
+                    "type": "text" | "thought" | "media" | "tool_call" | "tool_result",
 
                     # ─── Для текста и мыслей (type: "text" | "thought") ───
                     "text": "Строка контента",
+                    "signature": "base64_sig...", # Только для thought (опционально)
 
-                    # ─── Для медиа-файлов и документов (type: "image" | "audio" | "video" | "document") ───
+                    # ─── Для медиа-файлов и документов (type: "media") ───
                     # Также используется в tool_result, если инструмент возвращает файлы
                     "assets": [  # Массив, т.к. может быть несколько файлов
                         {
                             "id": "file123",  # Внутренний ID
-                            "local_path": "files/image/pic.jpg",
-                            "mime_type": "image/jpeg",  # Или "application/pdf", "text/plain" для документов
+                            "type": "image" | "audio" | "video" | "document", # Тип ассета
+                            "local_path": "files/image/pic.jpg", # Опционально
+                            "mime_type": "image/jpeg",  # Или "application/pdf"
                             "size_bytes": 102400,
                             "data_base64": "...",  # Опционально для маленьких файлов
                             "cloud_refs": {
+                                # Публичная ссылка (исходник)
+                                "public": {"uri": "https://example.com/pic.jpg"},
+                                # Типизированные поля
                                 "openai": {"id": "file-123"},
                                 "genai": {
                                     "uri": "https://generativelanguage.googleapis.com/...",
-                                    "expires_at": "ISO-TIMESTAMP"  # Файлы в Gemini живут 48 часов
-                                }
+                                    "expires_at": "ISO-TIMESTAMP"
+                                },
+                                # Можно добавлять произвольные поля
+                                "deepseek": {"id": "ds-file-456"}
                             }
                         }
                     ],

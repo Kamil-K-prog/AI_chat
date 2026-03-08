@@ -21,8 +21,11 @@ class Settings(BaseSettings):
     OPENROUTER_API_SECRET: str
     OPENROUTER_MODEL: str = "xiaomi/mimo-v2-flash:free"
 
-    # Системный промпт
+    # Настройки системы
     SYSTEM_PROMPT: str
+    MEDIA_FOLDER: str = "media"
+    MESSAGE_ID_LEN: int = 10
+
 
     # Конфигурация Pydantic Settings
     model_config = SettingsConfigDict(

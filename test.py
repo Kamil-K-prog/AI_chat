@@ -1,8 +1,10 @@
 from models.genai.gemini import Gemini3_1FlashLite
+from models.openai.deepseek import DeepseekChat, DeepseekReasoner
+from models import BaseModel
 import utils.types as t
 from utils.small_utils import generate_timestamp
 from utils.tools_parser.tools_parser import ToolsParser
-import utils.tools
+import utils.tools # noqa: F401
 
 
 def create_initial_history() -> t.ChatData:
@@ -15,7 +17,7 @@ def create_initial_history() -> t.ChatData:
                 role="user",
                 content=[
                     t.TextContent(
-                        text="Сложи два числа 5634 и 77854 с помощью bar_func. Не пиши ответ самостоятельно, ОБЯЗАТЕЛЬНО вызови функцию"
+                        text="Сложи два числа 5634 и 77854.1 с помощью bar_func"
                     )
                 ],
             ),
@@ -23,7 +25,7 @@ def create_initial_history() -> t.ChatData:
     )
 
 
-def auto_test(model: Gemini3_1FlashLite, tools_def, tools_exec):
+def auto_test(model: BaseModel, tools_def, tools_exec):
     print("\n--- Запуск автоматического тестирования ---")
     print("Формирование начальной истории УФС...")
     history = create_initial_history()
@@ -52,13 +54,14 @@ def auto_test(model: Gemini3_1FlashLite, tools_def, tools_exec):
 
     print("\n--- ВТОРОЙ ВЫЗОВ (ожидаем финальный ответ) ---")
 
+
     # Должен учесть результаты инструментов и дать ответ
     history, delta2 = model.generate(
         history=history, tools_definition=tools_def, tools_executable=tools_exec
     )
 
     print(f"Сгенерировано сообщений: {len(delta2)}")
-    print("Отладка: \n", history.model_dump_json(indent=2))
+    # print("Отладка: \n", history.model_dump_json(indent=2))
     for msg in delta2:
         print(f"Роль: {msg.role}")
         for c in msg.content:
@@ -68,14 +71,14 @@ def auto_test(model: Gemini3_1FlashLite, tools_def, tools_exec):
                 print(f"  Мысли: {c.text}")
 
 
-def chat_mode(model: Gemini3_1FlashLite, tools_def, tools_exec):
+def chat_mode(model: BaseModel, tools_def, tools_exec, provider: str = "genai"):
     from utils.small_utils.messages_helper import message_helper
 
     print("\n--- Режим интерактивного чата (для выхода введите 'exit' или 'выход') ---")
 
     # Инициализируем пустую историю
     history = t.ChatData(
-        chat_metadata=t.ChatMetadata(config=t.ChatConfig(provider="genai")), messages=[]
+        chat_metadata=t.ChatMetadata(config=t.ChatConfig(provider=provider)), messages=[]
     )
 
     while True:
@@ -129,15 +132,39 @@ def chat_mode(model: Gemini3_1FlashLite, tools_def, tools_exec):
 
 
 def main():
-    print("Инициализация модели...")
-    model = Gemini3_1FlashLite(
-        system_prompt="Ты полезный ИИ-ассистент. Отвечай кратко."
-    )
-
-    tools_def = ToolsParser.get_types_schema_genai()
     tools_exec = ToolsParser.get_tools_callables()
-
     print(f"Доступные инструменты: {list(tools_exec.keys())}")
+
+    # Выбор модели
+    print("\nВыберите модель:")
+    print("1 - Gemini 3.1 Flash Lite")
+    print("2 - DeepSeek Chat")
+    print("3 - DeepSeek Reasoner")
+    model_choice = input("> ").strip()
+
+    if model_choice == "1":
+        model = Gemini3_1FlashLite(
+            system_prompt="Ты полезный ИИ-ассистент. Отвечай кратко."
+        )
+        tools_def = ToolsParser.get_types_schema_genai()
+        provider = "genai"
+    elif model_choice == "2":
+        model = DeepseekChat(
+            system_prompt="Ты полезный ИИ-ассистент. Отвечай кратко."
+        )
+        tools_def = ToolsParser.get_json_schema_openai()
+        provider = "openai"
+    elif model_choice == "3":
+        model = DeepseekReasoner(
+            system_prompt="Ты полезный ИИ-ассистент. Отвечай кратко."
+        )
+        tools_def = ToolsParser.get_json_schema_openai()
+        provider = "openai"
+    else:
+        print("Неверный выбор.")
+        return
+
+    print(f"Модель: {model.model_name}")
 
     while True:
         print("\nВыберите режим:")
@@ -149,7 +176,7 @@ def main():
         if choice == "1":
             auto_test(model, tools_def, tools_exec)
         elif choice == "2":
-            chat_mode(model, tools_def, tools_exec)
+            chat_mode(model, tools_def, tools_exec, provider)
         elif choice == "0":
             break
         else:
@@ -157,9 +184,4 @@ def main():
 
 
 if __name__ == "__main__":
-    from config import settings
-
-    # Убедимся, что ключ загружен
-    if not settings.GEMINI_API_KEY:
-        print("ВНИМАНИЕ: Не установлен GEMINI_API_KEY в config/settings.py или .env")
     main()

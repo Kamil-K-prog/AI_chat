@@ -10,6 +10,7 @@ from google.genai import types
 В других частях программы (при выполнении tool_calls) эти названия зарезервированы и используются парсером аргументов.
 """
 
+
 class ToolsParser:
     _registry = []
 
@@ -252,6 +253,8 @@ class ToolsParser:
                     parameters=parameters_schema,
                 )
             )
+
+        res = [types.Tool(function_declarations=res)]
 
         return res
 

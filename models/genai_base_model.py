@@ -1,6 +1,6 @@
 from google.genai import types
 from google import genai
-from typing import List, Dict, Callable
+from typing import Dict, Callable
 from config import settings
 from utils.small_utils import (
     message_helper,
@@ -8,7 +8,6 @@ from utils.small_utils import (
     string_to_bytes,
     bytes_to_string,
 )
-import base64
 
 from .base_model import BaseModel
 import utils.types as t
@@ -21,11 +20,11 @@ class GenaiBaseModel(BaseModel):
     """
 
     def __init__(
-        self, is_reasoning=False, include_thoughts=True, reasoning_effort="medium"
+            self, model_name, is_reasoning=False, include_thoughts=True, reasoning_effort="medium", system_prompt=""
     ):
-        self.model_name = None  # Будет переопределено в конкретном классе модели
+        self.model_name = model_name
         self.client = genai.Client(api_key=settings.GEMINI_API_KEY)
-        self.system_prompt = ""
+        self.system_prompt = system_prompt
         self.thinking_config = (
             types.ThinkingConfig(
                 include_thoughts=include_thoughts, thinking_level=reasoning_effort
@@ -106,25 +105,12 @@ class GenaiBaseModel(BaseModel):
 
         return native_history
 
-    def generate(
-        self,
-        history: t.ChatData,
-        tools_definition,
-        tools_executable: Dict[str, Callable],
-    ) -> tuple[t.ChatData, list[t.Message]]:
-        native_history = self._convert_history_from_umf(history)
-
-        genai_tools = (
-            [types.Tool(function_declarations=tools_definition)]
-            if tools_definition
-            else None
-        )
-
+    def _do_request(self, native_history, tools_definition):
         response = self.client.models.generate_content(
             model=self.model_name,
             contents=native_history,
             config=types.GenerateContentConfig(
-                tools=genai_tools,
+                tools=tools_definition,
                 system_instruction=self.system_prompt,
                 automatic_function_calling=types.AutomaticFunctionCallingConfig(
                     disable=True
@@ -132,6 +118,17 @@ class GenaiBaseModel(BaseModel):
                 thinking_config=self.thinking_config,
             ),
         )
+        return response
+
+    def generate(
+            self,
+            history: t.ChatData,
+            tools_definition,
+            tools_executable: Dict[str, Callable],
+    ) -> tuple[t.ChatData, list[t.Message]]:
+        native_history = self._convert_history_from_umf(history)
+
+        response = self._do_request(native_history, tools_definition)
 
         new_delta = []
 
@@ -185,7 +182,8 @@ class GenaiBaseModel(BaseModel):
             )
         )
 
-        # Затем цикл вызова инструментов с добавлением в историю. Добавляется один message с ролью tool, и в контенте содержатся все результаты текущего раунда вызовов
+        # Затем цикл вызова инструментов с добавлением в историю.
+        # Добавляется один message с ролью tool, и в контенте содержатся все результаты текущего раунда вызовов
         results = []
         for tool_call, tool_call_id_fallback in tool_calls:
             is_error = False
@@ -202,7 +200,7 @@ class GenaiBaseModel(BaseModel):
                         name=tool_call.name,
                         content=str(
                             tool_result
-                        ),  # Пока просто оборачиваем в str, без обработки (возможных) медиафайлов
+                        ),  # Пока просто оборачиваем в str, без обработки медиафайлов
                         is_error=is_error,
                     ),
                 )
@@ -217,6 +215,6 @@ class GenaiBaseModel(BaseModel):
                 )
             )
 
-        # Медиафайлы и метаданные пока не обрабатываются
+        # Медиафайлы и метаданные не обрабатываются
         history.messages.extend(new_delta)
         return history, new_delta

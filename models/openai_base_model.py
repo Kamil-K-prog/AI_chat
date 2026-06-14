@@ -35,10 +35,11 @@ class OpenAiBaseModel(BaseModel):
             client.base_url = base_url
         return client
 
-    def _process_media_asset(self):
+    def _process_media_asset_upload(self, asset: t.Asset) -> None | dict:
+        # Этот метод переопределяется наследником, потому что не все модели мультимодальные
+        """Обрабатывает ассет для загрузки в API"""
         pass
 
-    # Без обработки медиа
     def _convert_history_from_umf(self, history: t.ChatData):
         native_history = []
 
@@ -51,12 +52,17 @@ class OpenAiBaseModel(BaseModel):
             elif message.role == "assistant":
                 thought = ""
                 tool_calls = []
-                text = ""
+                native_content = []
                 for content in message.content:
                     if self.is_thinking and content.type == "thought":
                         thought = content.text
                     elif content.type == "text":
-                        text += content.text
+                        native_content.append(
+                            {
+                                "type": "text",
+                                "text": content.text
+                            }
+                        )
                     elif content.type == "tool_call":
                         tool_calls.append(
                             {
@@ -68,10 +74,16 @@ class OpenAiBaseModel(BaseModel):
                                 },
                             }
                         )
+                    elif content.type == "media":
+                        for asset in content.assets:
+                            media_asset = self._process_media_asset_upload(asset)
+                            if media_asset:
+                                content.append(media_asset)
+
                 native_history.append(
                     {
                         "role": "assistant",
-                        "content": text,
+                        "content": native_content,
                         "reasoning_content": thought if thought else None,
                         "tool_calls": tool_calls if tool_calls else None,
                     }
@@ -106,7 +118,6 @@ class OpenAiBaseModel(BaseModel):
             tools_executable: Dict[str, Callable],
     ) -> tuple[t.ChatData, list[t.Message]]:
         native_history = self._convert_history_from_umf(history)
-        # print(f"Отладка: {native_history}")
 
         response = self._do_request(native_history, tools_definition)
         message = response.choices[0].message

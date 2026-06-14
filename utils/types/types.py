@@ -24,8 +24,10 @@ class CloudRef(BaseModel):
     id: Optional[str] = None  # file-xxx (OpenAI)
     uri: Optional[str] = None  # https://... (GenAI)
     expires_at: Optional[datetime] = None  # Время истечения срока жизни (GenAI)
+    filename: Optional[str] = None  # Имя файла в Google Files API (GenAI)
+    file_object: Optional[Any] = Field(default=None, exclude=True)  # Объект File в памяти (GenAI)
     # Разрешаем любые дополнительные поля для специфичных провайдеров
-    model_config = {"extra": "allow"}
+    model_config = {"extra": "allow", "arbitrary_types_allowed": True}
 
 
 class CloudRefs(BaseModel):
@@ -57,7 +59,7 @@ class Asset(BaseModel):
 
     id: str  # Внутренний уникальный ID
     type: Literal["image", "audio", "video", "document"]  # Тип ассета
-    local_path: Optional[str] = None  # Путь к файлу на диске (если есть)
+    local_path: str  # Путь к файлу на диске
     mime_type: str  # image/jpeg, audio/mp3, application/pdf и т.д.
     size_bytes: int = 0
     data_base64: Optional[str] = None  # Для небольших файлов (inline)
@@ -190,19 +192,6 @@ class Message(BaseModel):
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-class GenAICacheRef(BaseModel):
-    """Ссылка на кэшированный контент в Google GenAI."""
-
-    name: str  # cachedContents/xxx
-    expires_at: datetime
-
-
-class CacheRef(BaseModel):
-    """Ссылки на кэшированный контент."""
-
-    genai: Optional[GenAICacheRef] = None
-
-
 class ChatConfig(BaseModel):
     """Конфигурация чата."""
 
@@ -216,7 +205,6 @@ class ChatMetadata(BaseModel):
 
     version: Literal["1.0"] = "1.0"  # Версия формата УФС
     config: ChatConfig = Field(default_factory=ChatConfig)
-    cache_ref: Optional[CacheRef] = None
 
 
 # ══════════════════════════════════════════════════════════════════════════════

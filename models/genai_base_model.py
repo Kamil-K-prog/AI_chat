@@ -1,14 +1,18 @@
-from google.genai import types
+import base64
+from statistics import median
+
+from google.genai import types, errors
 from google import genai
-from typing import Dict, Callable
+from typing import Dict, Callable, List
 from config import settings
 from utils.small_utils import (
     message_helper,
     generate_timestamp,
     string_to_bytes,
     bytes_to_string,
+    file_to_bytes
 )
-
+from utils.types import Asset
 from .base_model import BaseModel
 import utils.types as t
 
@@ -33,11 +37,32 @@ class GenaiBaseModel(BaseModel):
             else None
         )
 
-    def _process_media_asset(self, asset: t.Asset):
-        pass
+    def _process_asset(self, asset: t.Asset) -> t.Asset:
+        """
+        Полный цикл работы с ассетом (медиафайлом): если он есть в облаке, то добавляем файл и возвращаем, если нет, то загружаем и возвращаем
+        Файл больше 20 МБ, иначе кодируем в Base64
+        """
+        filename = asset.cloud_refs.genai.filename
+        try:
+            # Если файл уже есть в облаке, то просто кладём его в объект, остальные метаданные верные
+            file = self.client.files.get(filename)
+            asset.cloud_refs.genai.file_object = file
+            return asset
+        except errors.APIError as e:
+            if e.status_code == 404:
+                # Если файл не найден, то нужно загрузить его и установить все нужные поля
+                file = self.client.files.upload(file=asset.local_path)
+                asset.cloud_refs.genai.filename = file.filename
+                asset.cloud_refs.genai.file_object = file
+                asset.cloud_refs.genai.uri = file.uri
+            return asset
 
-    # Без обработки медиа
-    def _convert_history_from_umf(self, history: t.ChatData):
+    def _convert_history_from_umf(self, history: t.ChatData) -> List[types.Content]:
+        """
+        Конвертирует из УФС в нативный для genai формат
+        :param history:
+        :return:
+        """
         native_history = []
 
         for message in history.messages:
@@ -48,18 +73,16 @@ class GenaiBaseModel(BaseModel):
                 preserved_thought_signature = None
                 for content in message.content:
                     if content.type == "thought":
-                        preserved_thought_signature = (
-                            string_to_bytes(content.signature)
-                            if content.signature
-                            else None
-                        )
-                        native_parts.append(
-                            types.Part(
-                                thought=True,
-                                thought_signature=preserved_thought_signature,
-                                text=content.text,
+                        if content.signature:  # Если ответ от модели genai, то есть подпись, и эту CoT можно подать на вход. Если мысли не подписаны, то API вернет ошибку
+                            # --- ПРОБЛЕМА --- Начиная с Gemini 3 если не вернуть мысли в цикле ReAct, то API вернёт ошибку 400 https://ai.google.dev/gemini-api/docs/thought-signatures?hl=ru#model-behavior
+                            preserved_thought_signature = string_to_bytes(content.signature)
+                            native_parts.append(
+                                types.Part(
+                                    thought=True,
+                                    thought_signature=preserved_thought_signature,
+                                    text=content.text,
+                                )
                             )
-                        )
                     elif content.type == "text":
                         native_parts.append(types.Part(text=content.text))
                     elif content.type == "tool_call":
@@ -73,35 +96,107 @@ class GenaiBaseModel(BaseModel):
                                 thought_signature=preserved_thought_signature,
                             )
                         )
-                        preserved_thought_signature = None
+                        # Забыл, зачем эта строка:preserved_thought_signature = None
+                    elif content.type == "media":
+                        for asset in content.assets:
+                            if asset.size_bytes < 20 * 1024 * 1024:  # Файлы меньше 20 Мб посылаем как строки
+                                if asset.data_base64:
+                                    raw_bytes = string_to_bytes(asset.data_base64)
+                                else:
+                                    raw_bytes = file_to_bytes(asset.local_path)
+                                media_part = types.Part(
+                                    inline_data=types.Blob(
+                                        data=raw_bytes,
+                                        mime_type=asset.mime_type
+                                    )
+                                )
+                            else:  # Файлы больше 20 МБ добавляем как URI, ведущий на google cloud
+                                media_asset = self._process_asset(asset)
+                                media_part = types.Part(
+                                    file_data=types.FileData(
+                                        file_uri=media_asset.cloud_refs.genai.uri,
+                                        mime_type=asset.mime_type
+                                    )
+                                )
+                            native_parts.append(media_part)
+
                 native_history.append(types.Content(role="model", parts=native_parts))
 
             elif message.role == "tool":
                 for content in message.content:
-                    native_parts.append(
-                        types.Part(
-                            function_response=types.FunctionResponse(
-                                id=content.tool_result.id,
-                                name=content.tool_result.name,
-                                response={
-                                    "output": content.tool_result.content,
-                                    "error": str(content.tool_result.is_error),
-                                },
-                            )
+                    media_parts = []
+                    tool_part = types.Part(
+                        function_response=types.FunctionResponse(
+                            id=content.tool_result.id,
+                            name=content.tool_result.name,
+                            response={
+                                "output": content.tool_result.content,
+                                "error": str(content.tool_result.is_error),
+                            },
                         )
                     )
+                    for asset in content.assets:
+                        if asset.size_bytes < 20 * 1024 * 1024:  # Файлы меньше 20 Мб посылаем как строки
+                            if asset.data_base64:
+                                raw_bytes = string_to_bytes(asset.data_base64)
+                            else:
+                                raw_bytes = file_to_bytes(asset.local_path)
+                            function_response_part = types.FunctionResponsePart(
+                                inline_data=types.FunctionResponseBlob(
+                                    data=raw_bytes,
+                                    mime_type=asset.mime_type
+                                )
+                            )
+                        else:  # Файлы больше 20 МБ добавляем как URI, ведущий на google cloud
+                            media_asset = self._process_asset(asset)
+                            function_response_part = types.FunctionResponsePart(
+                                file_data=types.FunctionResponseFileData(
+                                    file_uri=media_asset.cloud_refs.genai.uri,
+                                    mime_type=asset.mime_type
+                                )
+                            )
+                        media_parts.append(function_response_part)
+                    tool_part.function_response.parts = media_parts
+                    native_parts.append(tool_part)
+
                 native_history.append(
                     types.Content(
                         role="user",
                         parts=native_parts,
                     )
                 )
+
             elif message.role == "user":
-                native_history.append(
-                    types.Content(
-                        role="user", parts=[types.Part(text=message.content[0].text)]
-                    )
-                )
+                for content in message.content:
+                    if content.type == "text":
+                        native_parts.append(
+                            types.Part(
+                                text=content.text
+                            )
+                        )
+                    elif content.type == "media":  # Если пользователь приложил медиафайл к своему сообщению
+                        media_parts = []
+                        for asset in content.assets:
+                            if asset.size_bytes < 20 * 1024 * 1024:  # Файлы меньше 20 Мб посылаем как строки
+                                if asset.data_base64:
+                                    raw_bytes = string_to_bytes(asset.data_base64)
+                                else:
+                                    raw_bytes = file_to_bytes(asset.local_path)
+                                media_part = types.Part(
+                                    inline_data=types.Blob(
+                                        data=raw_bytes,
+                                        mime_type=asset.mime_type
+                                    )
+                                )
+                            else:  # Файлы больше 20 МБ добавляем как URI, ведущий на google cloud
+                                media_asset = self._process_asset(asset)
+                                media_part = types.Part(
+                                    file_data=types.FileData(
+                                        file_uri=media_asset.cloud_refs.genai.uri,
+                                        mime_type=asset.mime_type
+                                    )
+                                )
+                            media_parts.append(media_part)
 
         return native_history
 
@@ -173,6 +268,28 @@ class GenaiBaseModel(BaseModel):
                     )
                 )
                 tool_calls.append([part.function_call, tool_call_id_fallback])
+            elif part.inline_data:  # Текущие модели Gemini генерируют только изображение. Gemini Omni ещё недоступна в API, возможно генерация будет не в model.generate_content, как с nano banana, а в generate_video, как в Veo
+                image = part.as_image()  # Возвращает объект types.Image. Может содержать либо gcs_uri, либо image_bytes
+                image_id = message_helper.generate_id(settings.ASSET_ID_LEN)
+                image_path = f"{settings.MEDIA_FOLDER}/{image_id}.png"  # В доках указано .png
+                media_asset = t.Asset(
+                    id=image_id,
+                    type="image",
+                    local_path=image_path,
+                    mime_type="image/png",
+                    size_bytes=0,
+                )
+                if image.image_bytes:
+                    media_asset.data_base64 = bytes_to_string(image.image_bytes)
+                elif image.gcs_uri:
+                    media_asset.cloud_refs.genai.uri = image.gcs_uri
+                content.append(
+                    t.MediaContent(
+                        type="media",
+                        assets=[media_asset]
+                    )
+                )
+
         new_delta.append(
             t.Message(
                 id=message_helper.generate_id(settings.MESSAGE_ID_LEN),

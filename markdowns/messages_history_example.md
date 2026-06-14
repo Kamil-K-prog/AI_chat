@@ -1,20 +1,13 @@
 Пример структуры УФС:
 
-```python
-messages_structure = {
+```json
+{
     "chat_metadata": {  # Метаданные и настройки всего чата
         "version": "1.0",  # Версия формата УФС (не изменяется)
         "config": {
             "thinking_mode": "interleaved" | "preserved",
             "provider": "openai" | "genai",
             "...": "..."
-        },
-        # Кэш контента для GenAI (опционально)
-        "cache_ref": {
-            "genai": {
-                "name": "cachedContents/abc123",
-                "expires_at": "ISO-TIMESTAMP"
-            }
         }
     },
     "messages": [
@@ -44,7 +37,7 @@ messages_structure = {
                         {
                             "id": "file123",  # Внутренний ID
                             "type": "image" | "audio" | "video" | "document", # Тип ассета
-                            "local_path": "files/image/pic.jpg", # Опционально
+                            "local_path": "files/image/pic.jpg",
                             "mime_type": "image/jpeg",  # Или "application/pdf"
                             "size_bytes": 102400,
                             "data_base64": "...",  # Опционально для маленьких файлов

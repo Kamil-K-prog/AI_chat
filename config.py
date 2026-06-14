@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     SYSTEM_PROMPT: str
     MEDIA_FOLDER: str = "media"
     MESSAGE_ID_LEN: int = 10
+    ASSET_ID_LEN: int = 10
 
 
     # Конфигурация Pydantic Settings

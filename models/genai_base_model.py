@@ -1,18 +1,18 @@
-import base64
-from statistics import median
-
-from google.genai import types, errors
-from google import genai
+import os
+import time
 from typing import Dict, Callable, List
+
+from google import genai
+from google.genai import types, errors
+
 from config import settings
 from utils.small_utils import (
     message_helper,
     generate_timestamp,
     string_to_bytes,
     bytes_to_string,
-    file_to_bytes
+    file_to_bytes,
 )
-from utils.types import Asset
 from .base_model import BaseModel
 import utils.types as t
 
@@ -39,23 +39,37 @@ class GenaiBaseModel(BaseModel):
 
     def _process_asset(self, asset: t.Asset) -> t.Asset:
         """
-        Полный цикл работы с ассетом (медиафайлом): если он есть в облаке, то добавляем файл и возвращаем, если нет, то загружаем и возвращаем
-        Файл больше 20 МБ, иначе кодируем в Base64
+        Загружает ассет в Google Files API (или берёт уже загруженный) и возвращает
+        Asset с заполненными cloud_refs.genai. Для видео/аудио дожидается ACTIVE.
         """
+        if asset.cloud_refs is None:
+            asset.cloud_refs = t.CloudRefs(genai=t.CloudRef())
+        elif asset.cloud_refs.genai is None:
+            asset.cloud_refs.genai = t.CloudRef()
+
         filename = asset.cloud_refs.genai.filename
         try:
-            # Если файл уже есть в облаке, то просто кладём его в объект, остальные метаданные верные
-            file = self.client.files.get(filename)
-            asset.cloud_refs.genai.file_object = file
-            return asset
-        except errors.APIError as e:
-            if e.status_code == 404:
-                # Если файл не найден, то нужно загрузить его и установить все нужные поля
-                file = self.client.files.upload(file=asset.local_path)
-                asset.cloud_refs.genai.filename = file.filename
+            if filename:
+                file = self.client.files.get(name=filename)
                 asset.cloud_refs.genai.file_object = file
-                asset.cloud_refs.genai.uri = file.uri
-            return asset
+                return asset
+        except errors.APIError as e:
+            if e.code != 404:
+                raise
+
+        file = self.client.files.upload(file=asset.local_path)
+
+        while file.state.name == "PROCESSING":
+            time.sleep(5)
+            file = self.client.files.get(name=file.name)
+        if file.state.name == "FAILED":
+            raise RuntimeError(f"Обработка файла в Google Files API завершилась ошибкой: {file.error}")
+
+        asset.cloud_refs.genai.filename = file.name
+        asset.cloud_refs.genai.file_object = file
+        asset.cloud_refs.genai.uri = file.uri
+        asset.cloud_refs.genai.expires_at = file.expiration_time
+        return asset
 
     def _convert_history_from_umf(self, history: t.ChatData) -> List[types.Content]:
         """
@@ -135,7 +149,7 @@ class GenaiBaseModel(BaseModel):
                             },
                         )
                     )
-                    for asset in content.assets:
+                    for asset in content.assets or []:
                         if asset.size_bytes < 20 * 1024 * 1024:  # Файлы меньше 20 Мб посылаем как строки
                             if asset.data_base64:
                                 raw_bytes = string_to_bytes(asset.data_base64)
@@ -144,7 +158,7 @@ class GenaiBaseModel(BaseModel):
                             function_response_part = types.FunctionResponsePart(
                                 inline_data=types.FunctionResponseBlob(
                                     data=raw_bytes,
-                                    mime_type=asset.mime_type
+                                    mime_type=asset.mime_type,
                                 )
                             )
                         else:  # Файлы больше 20 МБ добавляем как URI, ведущий на google cloud
@@ -152,7 +166,7 @@ class GenaiBaseModel(BaseModel):
                             function_response_part = types.FunctionResponsePart(
                                 file_data=types.FunctionResponseFileData(
                                     file_uri=media_asset.cloud_refs.genai.uri,
-                                    mime_type=asset.mime_type
+                                    mime_type=asset.mime_type,
                                 )
                             )
                         media_parts.append(function_response_part)
@@ -197,6 +211,13 @@ class GenaiBaseModel(BaseModel):
                                     )
                                 )
                             media_parts.append(media_part)
+                        native_parts.extend(media_parts)
+                native_history.append(
+                    types.Content(
+                        role="user",
+                        parts=native_parts,
+                    )
+                )
 
         return native_history
 
@@ -268,21 +289,26 @@ class GenaiBaseModel(BaseModel):
                     )
                 )
                 tool_calls.append([part.function_call, tool_call_id_fallback])
-            elif part.inline_data:  # Текущие модели Gemini генерируют только изображение. Gemini Omni ещё недоступна в API, возможно генерация будет не в model.generate_content, как с nano banana, а в generate_video, как в Veo
-                image = part.as_image()  # Возвращает объект types.Image. Может содержать либо gcs_uri, либо image_bytes
+            elif part.inline_data:  # Текущие модели Gemini генерируют только изображение.
+                image = part.as_image()  # Может содержать либо gcs_uri, либо image_bytes
                 image_id = message_helper.generate_id(settings.ASSET_ID_LEN)
+                os.makedirs(settings.MEDIA_FOLDER, exist_ok=True)
                 image_path = f"{settings.MEDIA_FOLDER}/{image_id}.png"  # В доках указано .png
                 media_asset = t.Asset(
                     id=image_id,
                     type="image",
                     local_path=image_path,
-                    mime_type="image/png",
+                    mime_type=image.mime_type or "image/png",
                     size_bytes=0,
                 )
                 if image.image_bytes:
-                    media_asset.data_base64 = bytes_to_string(image.image_bytes)
+                    with open(image_path, "wb") as f:
+                        f.write(image.image_bytes)
+                    media_asset.size_bytes = len(image.image_bytes)
                 elif image.gcs_uri:
-                    media_asset.cloud_refs.genai.uri = image.gcs_uri
+                    media_asset.cloud_refs = t.CloudRefs(
+                        genai=t.CloudRef(uri=image.gcs_uri)
+                    )
                 content.append(
                     t.MediaContent(
                         type="media",

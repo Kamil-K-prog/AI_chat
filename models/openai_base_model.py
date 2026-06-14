@@ -78,7 +78,7 @@ class OpenAiBaseModel(BaseModel):
                         for asset in content.assets:
                             media_asset = self._process_media_asset_upload(asset)
                             if media_asset:
-                                content.append(media_asset)
+                                native_content.append(media_asset)
 
                 native_history.append(
                     {

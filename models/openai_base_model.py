@@ -89,9 +89,28 @@ class OpenAiBaseModel(BaseModel):
                     }
                 )
             elif message.role == "user":
+                native_content = []
+                for content in message.content:
+                    if content.type == "text":
+                        native_content.append(
+                            {
+                                "type": "text",
+                                "text": content.text
+                            }
+                        )
+                    elif content.type == "media":
+                        for asset in content.assets:
+                            media_asset = self._process_media_asset_upload(asset)
+                            if media_asset:
+                                native_content.append(media_asset)
                 native_history.append(
-                    {"role": "user", "content": message.content[0].text}
+                    {
+                        "role": "user",
+                        "content": native_content
+                    }
                 )
+
+
             elif message.role == "tool":
                 for content in message.content:
                     native_history.append(
@@ -138,7 +157,7 @@ class OpenAiBaseModel(BaseModel):
                     t.ToolCallContent(
                         type="tool_call",
                         tool_call=t.ToolCall(
-                            id=tool_call.id,
+                            id=tool_call.id or tool_call_id_fallback,
                             name=tool_call.function.name,
                             args=json.loads(tool_call.function.arguments)
                         )

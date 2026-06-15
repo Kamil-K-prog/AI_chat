@@ -12,6 +12,7 @@ from utils.small_utils import (
     string_to_bytes,
     bytes_to_string,
     file_to_bytes,
+    count_file_size
 )
 from .base_model import BaseModel
 import utils.types as t
@@ -36,6 +37,16 @@ class GenaiBaseModel(BaseModel):
             if is_reasoning
             else None
         )
+
+    def _save_media_from_gcs(self, uri, local_path) -> None:
+        """
+        ЗАГОТОВКА
+        Загружает медиафайл из GCS и сохраняет его
+        :param uri: ссылка для получения файла
+        :param local_path: путь для сохранения
+        :return: None
+        """
+        pass
 
     def _process_asset(self, asset: t.Asset) -> t.Asset:
         """
@@ -83,12 +94,14 @@ class GenaiBaseModel(BaseModel):
             native_parts = []
             if message.role == "system":
                 self.system_prompt = message.content[0].text
-            if message.role == "assistant":
+            elif message.role == "assistant":
                 preserved_thought_signature = None
                 for content in message.content:
                     if content.type == "thought":
-                        if content.signature:  # Если ответ от модели genai, то есть подпись, и эту CoT можно подать на вход. Если мысли не подписаны, то API вернет ошибку
-                            # --- ПРОБЛЕМА --- Начиная с Gemini 3 если не вернуть мысли в цикле ReAct, то API вернёт ошибку 400 https://ai.google.dev/gemini-api/docs/thought-signatures?hl=ru#model-behavior
+                        if content.signature:  # Если ответ от модели genai, то есть подпись, и эту CoT можно подать на вход.
+                            # Если мысли не подписаны, то API вернет ошибку
+                            # --- ПРОБЛЕМА --- Начиная с Gemini 3 если не вернуть мысли в цикле ReAct, то API вернёт ошибку 400
+                            # https://ai.google.dev/gemini-api/docs/thought-signatures?hl=ru#model-behavior
                             preserved_thought_signature = string_to_bytes(content.signature)
                             native_parts.append(
                                 types.Part(
@@ -291,30 +304,34 @@ class GenaiBaseModel(BaseModel):
                 tool_calls.append([part.function_call, tool_call_id_fallback])
             elif part.inline_data:  # Текущие модели Gemini генерируют только изображение.
                 image = part.as_image()  # Может содержать либо gcs_uri, либо image_bytes
-                image_id = message_helper.generate_id(settings.ASSET_ID_LEN)
-                os.makedirs(settings.MEDIA_FOLDER, exist_ok=True)
-                image_path = f"{settings.MEDIA_FOLDER}/{image_id}.png"  # В доках указано .png
-                media_asset = t.Asset(
-                    id=image_id,
-                    type="image",
-                    local_path=image_path,
-                    mime_type=image.mime_type or "image/png",
-                    size_bytes=0,
-                )
-                if image.image_bytes:
-                    with open(image_path, "wb") as f:
-                        f.write(image.image_bytes)
-                    media_asset.size_bytes = len(image.image_bytes)
-                elif image.gcs_uri:
-                    media_asset.cloud_refs = t.CloudRefs(
-                        genai=t.CloudRef(uri=image.gcs_uri)
+                if image:
+                    image_id = message_helper.generate_id(settings.ASSET_ID_LEN)
+                    os.makedirs(settings.MEDIA_FOLDER, exist_ok=True)
+                    image_path = f"{settings.MEDIA_FOLDER}/{image_id}.png"  # В доках указано .png
+                    media_asset = t.Asset(
+                        id=image_id,
+                        type="image",
+                        local_path=image_path,
+                        mime_type=image.mime_type or "image/png",
                     )
-                content.append(
-                    t.MediaContent(
-                        type="media",
-                        assets=[media_asset]
+                    if image.image_bytes:
+                        image.save(image_path)
+                        media_asset.size_bytes = len(image.image_bytes)
+                    # Код ниже закомментирован, так как в документации нет слов о том,
+                    # что сгенерированное nano banana изображение может НЕ содержаться в виде байтов и его надо скачивать
+                    # elif image.gcs_uri:
+                    #     media_asset.cloud_refs = t.CloudRefs(
+                    #         genai=t.CloudRef(uri=image.gcs_uri)
+                    #     )
+                    #     media_asset.size_bytes = count_file_size(image_path)
+                    content.append(
+                        t.MediaContent(
+                            type="media",
+                            assets=[media_asset]
+                        )
                     )
-                )
+                else:  # Непонятно, что ещё кроме изображения может вернуть модель
+                    pass
 
         new_delta.append(
             t.Message(

@@ -28,3 +28,11 @@ def bar_func(first: float, second: float) -> float:
     :return: Сумма первого и второго параметра
     """
     return first + second
+
+@register_tool
+def current_weather() -> float:
+    """
+    Возвращает текущую погоду у пользователя
+    :return: число с плавающей запятой - текущая погода за окном у пользователя в Цельсиях
+    """
+    return 30.1

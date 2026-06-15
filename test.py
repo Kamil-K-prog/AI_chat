@@ -357,6 +357,71 @@ def test_react_switching():
     except Exception as e:
         print(f"  [УСПЕХ] Перехвачена ошибка: {e}")
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # СЦЕНАРИЙ В: Успешная смена модели ПОСЕРЕДИНЕ цикла ReAct (GenAI -> OpenAI)
+    # ══════════════════════════════════════════════════════════════════════════
+    print("\n--- [Сценарий В] Успешная смена модели ПОСЕРЕДИНЕ цикла ReAct (GenAI -> OpenAI) ---")
+    history_c = t.ChatData(
+        chat_metadata=t.ChatMetadata(config=t.ChatConfig(provider="genai")),
+        messages=[]
+    )
+    history_c.messages.append(
+        t.Message(
+            id="msg_user_react_c",
+            timestamp=generate_timestamp(),
+            role="user",
+            content=[t.TextContent(text="Узнай погоду за окном у пользователя, затем с помощью функции прибавь к результату 25 и выведи ответ")]
+        )
+    )
+    
+    # 1. Первый шаг Gemini. Мы ожидаем, что она вызовет current_weather.
+    print("Вызов Gemini (шаг 1)...")
+    history_c, delta_c1 = gemini_model.generate(
+        history=history_c,
+        tools_definition=tools_def_genai,
+        tools_executable=tools_exec
+    )
+    
+    has_tool_call_c = False
+    for msg in delta_c1:
+        print(f"  Роль: {msg.role}")
+        for c in msg.content:
+            if c.type == "tool_call":
+                print(f"    Вызов инструмента: {c.tool_call.name}({c.tool_call.args})")
+                has_tool_call_c = True
+            elif c.type == "tool_result":
+                print(f"    Результат: {c.tool_result.content}")
+                
+    if not has_tool_call_c:
+        print("  [Предупреждение] Gemini не вызвала инструмент на первом шаге!")
+
+    # 2. Переключаемся на DeepSeek посередине цикла ReAct
+    print("\nПереключаемся на DeepSeek... (ожидаем продолжение ReAct без ошибок)")
+    history_c.chat_metadata.config.provider = "openai"
+    
+    # Запускаем цикл DeepSeek до финального ответа
+    while True:
+        history_c, delta_c2 = deepseek_model.generate(
+            history=history_c,
+            tools_definition=tools_def_openai,
+            tools_executable=tools_exec
+        )
+        
+        for msg in delta_c2:
+            print(f"  Роль: {msg.role}")
+            for c in msg.content:
+                if c.type == "tool_call":
+                    print(f"    Вызов инструмента: {c.tool_call.name}({c.tool_call.args})")
+                elif c.type == "tool_result":
+                    print(f"    Результат: {c.tool_result.content}")
+                elif c.type == "text":
+                    print(f"    Текст: {c.text}")
+                    
+        if delta_c2[-1].role == "tool":
+            continue
+        else:
+            break
+
     print("\n--- Тест ReAct завершен ---")
 
 

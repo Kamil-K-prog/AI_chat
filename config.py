@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str
     DEEPSEEK_API_KEY: str
     GLM_API_KEY: str
+    KIMI_API_KEY: str
 
     # Настройки OpenRouter
     OPENROUTER_API_KEY: str

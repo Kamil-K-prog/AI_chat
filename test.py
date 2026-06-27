@@ -45,7 +45,7 @@ def auto_test(model: BaseModel, tools_def, tools_exec):
                 )
             elif c.type == "tool_result":
                 print(
-                    f"  Результат инструмента {c.tool_result.name}: {c.tool_result.content} (error: {c.tool_result.is_error})"
+                    f"  Результат инструмента {c.tool_result.name}: {c.tool_result.text_content} (error: {c.tool_result.is_error})"
                 )
             elif c.type == "text":
                 print(f"  Текст: {c.text}")
@@ -121,7 +121,7 @@ def chat_mode(model: BaseModel, tools_def, tools_exec, provider: str = "genai"):
                         )
                     elif c.type == "tool_result":
                         has_tool_calls_or_results = True
-                        print(f"[Результат инструмента]: {c.tool_result.content}")
+                        print(f"[Результат инструмента]: {c.tool_result.text_content}")
 
             # Если были вызовы инструментов (последним добавилось сообщение tool),
             # нужно снова вызвать модель, чтобы она ответила на основе результата
@@ -268,7 +268,7 @@ def test_react_switching():
                 if c.type == "tool_call":
                     print(f"    Вызов инструмента: {c.tool_call.name}({c.tool_call.args})")
                 elif c.type == "tool_result":
-                    print(f"    Результат: {c.tool_result.content}")
+                    print(f"    Результат: {c.tool_result.text_content}")
                 elif c.type == "text":
                     print(f"    Текст: {c.text}")
                     
@@ -334,7 +334,7 @@ def test_react_switching():
                 print(f"    Вызов инструмента: {c.tool_call.name}({c.tool_call.args})")
                 has_tool_call = True
             elif c.type == "tool_result":
-                print(f"    Результат: {c.tool_result.content}")
+                print(f"    Результат: {c.tool_result.text_content}")
                 
     if not has_tool_call:
         print("  [Предупреждение] Модель не вызвала инструмент на первом шаге!")
@@ -390,7 +390,7 @@ def test_react_switching():
                 print(f"    Вызов инструмента: {c.tool_call.name}({c.tool_call.args})")
                 has_tool_call_c = True
             elif c.type == "tool_result":
-                print(f"    Результат: {c.tool_result.content}")
+                print(f"    Результат: {c.tool_result.text_content}")
                 
     if not has_tool_call_c:
         print("  [Предупреждение] Gemini не вызвала инструмент на первом шаге!")
@@ -413,7 +413,7 @@ def test_react_switching():
                 if c.type == "tool_call":
                     print(f"    Вызов инструмента: {c.tool_call.name}({c.tool_call.args})")
                 elif c.type == "tool_result":
-                    print(f"    Результат: {c.tool_result.content}")
+                    print(f"    Результат: {c.tool_result.text_content}")
                 elif c.type == "text":
                     print(f"    Текст: {c.text}")
                     

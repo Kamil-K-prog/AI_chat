@@ -1,13 +1,10 @@
-# DeepSeek Model
-# TODO: Реализовать класс для моделей DeepSeek
-
 from models import OpenAiBaseModel
 from config import settings
 
 
 class DeepseekReasoner(OpenAiBaseModel):
     def __init__(self,
-                 model_name="deepseek-reasoner",
+                 model_name="deepseek-v4-pro",
                  system_prompt="Ты полезный ИИ ассистент",
                  base_url="https://api.deepseek.com",
                  api_key=settings.DEEPSEEK_API_KEY):
@@ -16,7 +13,7 @@ class DeepseekReasoner(OpenAiBaseModel):
 
 class DeepseekChat(OpenAiBaseModel):
     def __init__(self,
-                 model_name="deepseek-chat",
+                 model_name="deepseek-v4-flash",
                  system_prompt="Ты полезный ИИ ассистент",
                  base_url="https://api.deepseek.com",
                  api_key=settings.DEEPSEEK_API_KEY):

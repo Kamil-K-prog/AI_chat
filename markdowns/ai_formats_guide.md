@@ -128,7 +128,7 @@ tools = [
 **Google GenAI:**
 
 ```python
-for part in response.candidates[0].content.parts:
+for part in response.candidates[0].text_content.parts:
     if part.function_call:
         name = part.function_call.name
         args = part.function_call.args  # dict
@@ -202,7 +202,7 @@ types.Content(
 ### Google GenAI
 
 ```python
-response.candidates[0].content.parts[]  # List[Part]
+response.candidates[0].text_content.parts[]  # List[Part]
 # Каждый Part может быть:
 #   - part.text (строка)
 #   - part.thought (bool) + part.text — мысли модели
@@ -216,8 +216,8 @@ response.usage_metadata.candidates_token_count
 ### OpenAI
 
 ```python
-response.choices[0].message.content      # Текст ответа
-response.choices[0].message.tool_calls   # Список вызовов [ChatCompletionMessageToolCall]
+response.choices[0].message.text_content  # Текст ответа
+response.choices[0].message.tool_calls  # Список вызовов [ChatCompletionMessageToolCall]
 response.choices[0].message.reasoning_content  # Мысли (o1/o3)
 
 response.choices[0].finish_reason  # "stop", "tool_calls", "length", "content_filter"
@@ -246,7 +246,7 @@ config = types.GenerateContentConfig(
     thinking_config=types.ThinkingConfig(include_thoughts=True)
 )
 
-for part in response.candidates[0].content.parts:
+for part in response.candidates[0].text_content.parts:
     if part.thought:
         print(f"МЫСЛЬ: {part.text}")
     else:
@@ -257,7 +257,7 @@ for part in response.candidates[0].content.parts:
 
 ```python
 thought = response.choices[0].message.reasoning_content  # Может быть None
-answer = response.choices[0].message.content
+answer = response.choices[0].message.text_content
 ```
 
 > **УФС**: Мысли сохраняются как `ThoughtContent(type="thought", text="...")`.

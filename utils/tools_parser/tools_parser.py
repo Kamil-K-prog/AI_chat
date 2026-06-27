@@ -260,6 +260,12 @@ class ToolsParser:
 
 
 # Декоратор для регистрации инструментов. Добавляет в пул сами объекты
-def register_tool(func):
-    ToolsParser.register_tool(func)
-    return func
+def register_tool(func=None, *, returns_media: bool = False, mime_type: str | None = None):
+    def decorator(f):
+        f.returns_media = returns_media
+        f.mime_type = mime_type
+        ToolsParser.register_tool(f)
+        return f
+    if func is None:
+        return decorator
+    return decorator(func)

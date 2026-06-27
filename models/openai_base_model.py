@@ -1,13 +1,16 @@
 # OpenAI Base Model
+import mimetypes
+import json
 from openai import OpenAI
 from typing import Dict, Callable
-import json
+import filetype
 import utils.types as t
 from .base_model import BaseModel
 from config import settings
 from utils.small_utils import (
     message_helper,
     generate_timestamp,
+    bytes_to_string,
 )
 
 
@@ -35,9 +38,12 @@ class OpenAiBaseModel(BaseModel):
             client.base_url = base_url
         return client
 
-    def _process_media_asset_upload(self, asset: t.Asset) -> None | dict:
+    def _process_asset(self, asset: t.Asset) -> None | dict:
         # Этот метод переопределяется наследником, потому что не все модели мультимодальные
-        """Обрабатывает ассет для загрузки в API"""
+        """
+        Обрабатывает ассет для загрузки в API
+        Реализовать в наследниках: если ассет был загружен в облако провайдера или как-то обработан, то обновлять его в УФС, чтобы избежать повторной загрузки
+        """
         pass
 
     def _convert_history_from_umf(self, history: t.ChatData):
@@ -76,7 +82,7 @@ class OpenAiBaseModel(BaseModel):
                         )
                     elif content.type == "media":
                         for asset in content.assets:
-                            media_asset = self._process_media_asset_upload(asset)
+                            media_asset = self._process_asset(asset)
                             if media_asset:
                                 native_content.append(media_asset)
 
@@ -100,7 +106,7 @@ class OpenAiBaseModel(BaseModel):
                         )
                     elif content.type == "media":
                         for asset in content.assets:
-                            media_asset = self._process_media_asset_upload(asset)
+                            media_asset = self._process_asset(asset)
                             if media_asset:
                                 native_content.append(media_asset)
                 native_history.append(
@@ -116,17 +122,20 @@ class OpenAiBaseModel(BaseModel):
                     native_history.append(
                         {
                             "role": "tool",
-                            "content": f"Function response: ```{content.tool_result.content}```\nError: {content.tool_result.is_error}",
+                            "content": f"Function response: ```{content.tool_result.text_content}```\nError: {content.tool_result.is_error}",
                             "tool_call_id": content.tool_result.id,
                         }
                     )
         return native_history
 
-    def _do_request(self, native_history, tools_definition):
+    def _do_request(self, native_history, tools_definition, extra_body=None):
+        if extra_body is None:
+            extra_body = {}
         response = self.client.chat.completions.create(
             model=self.model_name,
             messages=native_history,
             tools=tools_definition,
+            extra_body=extra_body
         )
         return response
 
@@ -135,10 +144,11 @@ class OpenAiBaseModel(BaseModel):
             history: t.ChatData,
             tools_definition,
             tools_executable: Dict[str, Callable],
+            extra_body: dict
     ) -> tuple[t.ChatData, list[t.Message]]:
         native_history = self._convert_history_from_umf(history)
 
-        response = self._do_request(native_history, tools_definition)
+        response = self._do_request(native_history, tools_definition, extra_body)
         message = response.choices[0].message
 
         new_delta = []
@@ -175,22 +185,76 @@ class OpenAiBaseModel(BaseModel):
         results = []
         for tool_call, tool_call_id_fallback in tool_calls:
             is_error = False
+            tool_result_asset = None
             try:
-                tool_result = tools_executable[tool_call.function.name](**json.loads(tool_call.function.arguments))
+                current_tool = tools_executable[tool_call.function.name]
+                # Если функция возвращает медиа
+                if getattr(current_tool, "returns_media", False):
+                    tool_result = tools_executable[tool_call.function.name](**json.loads(tool_call.function.arguments))
+
+                    # Распаковка результатов функции
+                    tool_result_str = "Медиафайл успешно сгенерирован"
+                    media_bytes = b""
+                    mime_type_str = None
+                    if isinstance(tool_result, tuple):
+                        if len(tool_result) == 3:
+                            tool_result_str, media_bytes, mime_type_str = tool_result
+                        elif len(tool_result) == 2:
+                            # Предположим, вернули (bytes, mime_type) или (text, bytes)
+                            if isinstance(tool_result[0], bytes):
+                                media_bytes, mime_type_str = tool_result
+                            else:
+                                tool_result_str, media_bytes = tool_result
+                    elif isinstance(tool_result, bytes):
+                        media_bytes = tool_result
+
+                    asset_id = message_helper.generate_id(settings.ASSET_ID_LEN)
+
+                    # Угадываем MIME тип
+                    kind = filetype.guess(media_bytes)
+                    mime_type = getattr(current_tool, "mime_type", None) or mime_type_str or (
+                        kind.mime if kind else "application/octet-stream")
+                    if mime_type.startswith("image/"):
+                        asset_type = "image"
+                    elif mime_type.startswith("video/"):
+                        asset_type = "video"
+                    elif mime_type.startswith("audio/"):
+                        asset_type = "audio"
+                    else:
+                        asset_type = "document"
+
+                    # Сохраняем медиа файл
+                    ext = mimetypes.guess_extension(mime_type) or ".bin"
+                    asset_local_path = f"{settings.MEDIA_FOLDER}/{asset_id}{ext}"
+                    with open(asset_local_path, "wb") as f:
+                        f.write(media_bytes)
+
+                    # Добавляем ассет
+                    tool_result_asset = [t.Asset(
+                        id=asset_id,
+                        type=asset_type,
+                        local_path=asset_local_path,
+                        mime_type=mime_type,
+                        size_bytes=len(media_bytes),
+                        data_base64=bytes_to_string(media_bytes) if len(media_bytes) < 20 * 1024 * 1024 else None
+                    )]
+                else:
+                    tool_result_str = tools_executable[tool_call.function.name](**json.loads(tool_call.function.arguments))
+
             except Exception as e:
                 is_error = True
-                tool_result = str(e)
+                tool_result_str = str(e)
+
             results.append(
                 t.ToolResultContent(
                     type="tool_result",
                     tool_result=t.ToolResult(
                         id=tool_call.id or tool_call_id_fallback,
                         name=tool_call.function.name,
-                        content=str(
-                            tool_result
-                        ),  # Пока просто оборачиваем в str, без обработки медиафайлов
+                        text_content=str(tool_result_str),
                         is_error=is_error,
                     ),
+                    assets=tool_result_asset
                 )
             )
         if tool_calls:

@@ -63,6 +63,7 @@ class Asset(BaseModel):
     mime_type: str  # image/jpeg, audio/mp3, application/pdf и т.д.
     size_bytes: int = 0
     data_base64: Optional[str] = None  # Для небольших файлов (inline)
+    ocr_text: Optional[str] = None # Для документов, распознанных OCR (для переиспользования)
     cloud_refs: Optional[CloudRefs] = None  # Ссылки на загруженные копии
 
 
@@ -84,7 +85,7 @@ class ToolResult(BaseModel):
 
     id: str  # Должен совпадать с id из ToolCall
     name: str  # Имя функции
-    content: str  # Текстовый результат
+    text_content: str  # Текстовый результат
     is_error: bool = False
 
 

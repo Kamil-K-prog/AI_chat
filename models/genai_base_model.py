@@ -1,6 +1,8 @@
 import os
 import time
+import mimetypes
 from typing import Dict, Callable, List
+import filetype
 
 from google import genai
 from google.genai import types, errors
@@ -11,8 +13,7 @@ from utils.small_utils import (
     generate_timestamp,
     string_to_bytes,
     bytes_to_string,
-    file_to_bytes,
-    count_file_size
+    file_to_bytes
 )
 from .base_model import BaseModel
 import utils.types as t
@@ -52,6 +53,8 @@ class GenaiBaseModel(BaseModel):
         """
         Загружает ассет в Google Files API (или берёт уже загруженный) и возвращает
         Asset с заполненными cloud_refs.genai. Для видео/аудио дожидается ACTIVE.
+
+        TODO: если ассет был загружен в GCS, то обновлять его в УФС, чтобы избежать повторной загрузки
         """
         if asset.cloud_refs is None:
             asset.cloud_refs = t.CloudRefs(genai=t.CloudRef())
@@ -97,7 +100,7 @@ class GenaiBaseModel(BaseModel):
             elif message.role == "assistant":
                 preserved_thought_signature = None
                 for content in message.content:
-                    if content.type == "thought":
+                    if self.thinking_config and content.type == "thought":
                         if content.signature:  # Если ответ от модели genai, то есть подпись, и эту CoT можно подать на вход.
                             # Если мысли не подписаны, то API вернет ошибку
                             # --- ПРОБЛЕМА --- Начиная с Gemini 3 если не вернуть мысли в цикле ReAct, то API вернёт ошибку 400
@@ -157,7 +160,7 @@ class GenaiBaseModel(BaseModel):
                             id=content.tool_result.id,
                             name=content.tool_result.name,
                             response={
-                                "output": content.tool_result.content,
+                                "output": content.tool_result.text_content,
                                 "error": str(content.tool_result.is_error),
                             },
                         )
@@ -254,6 +257,7 @@ class GenaiBaseModel(BaseModel):
             history: t.ChatData,
             tools_definition,
             tools_executable: Dict[str, Callable],
+            extra_body: dict,
     ) -> tuple[t.ChatData, list[t.Message]]:
         native_history = self._convert_history_from_umf(history)
 
@@ -347,22 +351,78 @@ class GenaiBaseModel(BaseModel):
         results = []
         for tool_call, tool_call_id_fallback in tool_calls:
             is_error = False
+            tool_result_asset = None
             try:
-                tool_result = tools_executable[tool_call.name](**tool_call.args)
+                current_tool = tools_executable[tool_call.name]
+                # Если функция возвращает медиа
+                if getattr(current_tool, "returns_media", False):
+                    tool_result = tools_executable[tool_call.name](**tool_call.args)
+
+                    # Распаковка результатов функции
+                    tool_result_str = "Медиафайл успешно сгенерирован"
+                    media_bytes = b""
+                    mime_type_str = None
+                    if isinstance(tool_result, tuple):
+                        if len(tool_result) == 3:
+                            tool_result_str, media_bytes, mime_type_str = tool_result
+                        elif len(tool_result) == 2:
+                            # Предположим, вернули (bytes, mime_type) или (text, bytes)
+                            if isinstance(tool_result[0], bytes):
+                                media_bytes, mime_type_str = tool_result
+                            else:
+                                tool_result_str, media_bytes = tool_result
+                    elif isinstance(tool_result, bytes):
+                        media_bytes = tool_result
+
+                    asset_id = message_helper.generate_id(settings.ASSET_ID_LEN)
+
+                    # Угадываем MIME тип
+                    kind = filetype.guess(media_bytes)
+                    mime_type = getattr(current_tool, "mime_type", None) or mime_type_str or (
+                        kind.mime if kind else "application/octet-stream")
+                    if mime_type.startswith("image/"):
+                        asset_type = "image"
+                    elif mime_type.startswith("video/"):
+                        asset_type = "video"
+                    elif mime_type.startswith("audio/"):
+                        asset_type = "audio"
+                    elif mime_type.startswith("text/") or mime_type.startswith("application/"):
+                        asset_type = "document"
+                    else:
+                        raise TypeError(f"Функция {tool_call.name} сгенерировала файл неподдерживаемого типа")
+
+                    # Сохраняем медиа файл
+                    asset_extension = mimetypes.guess_extension(mime_type) or ".bin"
+                    asset_local_path = f"{settings.MEDIA_FOLDER}/{asset_id}{mimetypes.guess_extension(mime_type)}"
+                    with open(asset_local_path, "wb") as f:
+                        f.write(media_bytes)
+
+                    # Добавляем ассет
+                    tool_result_asset = [t.Asset(
+                        id=asset_id,
+                        type=asset_type,
+                        local_path=asset_local_path,
+                        mime_type=mime_type,
+                        size_bytes=len(media_bytes),
+                        data_base64=bytes_to_string(media_bytes) if len(media_bytes) < 20 * 1024 * 1024 else None
+                    )]
+                else:
+                    tool_result_str = tools_executable[tool_call.name](**tool_call.args)
+
             except Exception as e:
                 is_error = True
-                tool_result = str(e)
+                tool_result_str = str(e)
+
             results.append(
                 t.ToolResultContent(
                     type="tool_result",
                     tool_result=t.ToolResult(
                         id=tool_call.id or tool_call_id_fallback,
                         name=tool_call.name,
-                        content=str(
-                            tool_result
-                        ),  # Пока просто оборачиваем в str, без обработки медиафайлов
+                        text_content=str(tool_result_str),
                         is_error=is_error,
                     ),
+                    assets=tool_result_asset
                 )
             )
         if tool_calls:

@@ -1,5 +1,20 @@
-from .base_model import BaseModel
-from .genai_base_model import GenaiBaseModel
-from .openai_base_model import OpenAiBaseModel
+"""Публичный API нового слоя моделей."""
 
-__all__ = ['BaseModel', 'GenaiBaseModel', 'OpenAiBaseModel']
+from .base import BaseModel
+from .providers import GenaiProvider, OpenAiProvider, make_model
+from .catalog import ModelSpec, get_spec, list_specs
+from .history import HistoryAppender, HistoryValidator
+from .request import GenerationRequestOptions
+
+__all__ = [
+    "BaseModel",
+    "GenaiProvider",
+    "OpenAiProvider",
+    "make_model",
+    "ModelSpec",
+    "get_spec",
+    "list_specs",
+    "HistoryAppender",
+    "HistoryValidator",
+    "GenerationRequestOptions",
+]

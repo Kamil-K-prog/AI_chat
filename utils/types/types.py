@@ -59,7 +59,7 @@ class Asset(BaseModel):
 
     id: str  # Внутренний уникальный ID
     type: Literal["image", "audio", "video", "document"]  # Тип ассета
-    local_path: str  # Путь к файлу на диске
+    absolute_path: str  # Путь к файлу на диске
     mime_type: str  # image/jpeg, audio/mp3, application/pdf и т.д.
     size_bytes: int = 0
     data_base64: Optional[str] = None  # Для небольших файлов (inline)

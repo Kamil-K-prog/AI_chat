@@ -2,7 +2,7 @@
 
 ---
 
-Работа ведётся в ветке refactor/SOLIDify. Привожу код в порядок!
+Работа ведётся в ветке [refactor/SOLIDify](https://github.com/Kamil-K-prog/AI_chat/tree/refactor/SOLIDify). Привожу код в порядок!
 
 ---
 
